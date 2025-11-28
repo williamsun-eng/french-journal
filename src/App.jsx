@@ -12,13 +12,20 @@ import {
   Sparkles,
   BookText,
   X,
-  HelpCircle
+  HelpCircle,
+  LogIn,
+  LogOut,
+  User
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
   signInAnonymously, 
-  onAuthStateChanged 
+  signInWithCustomToken, 
+  onAuthStateChanged,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -44,7 +51,7 @@ const firebaseConfig = {
 // --- 2. GEMINI API KEY ---
 const apiKey = "AIzaSyBz642GWXDZAakN6adVkW0timspyr-LCAc"; 
 
-// --- 3. INITIALIZATION (Do not change this) ---
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -63,31 +70,51 @@ export default function FrenchJournal() {
   const [searchTerm, setSearchTerm] = useState('');
 
   // Feature States
-  const [story, setStory] = useState(null); 
+  const [story, setStory] = useState(null);
   const [showStoryModal, setShowStoryModal] = useState(false);
   const [grammarExplanations, setGrammarExplanations] = useState({});
 
-  // 1. Authentication Setup (Simplified for Local Use)
+  // 1. Authentication Setup
   useEffect(() => {
     const initAuth = async () => {
-      try {
-        await signInAnonymously(auth);
-      } catch (err) {
-        console.error("Auth error:", err);
-        setError("Failed to authenticate. Please refresh.");
+      // Only sign in anonymously if we aren't already signed in
+      if (!auth.currentUser) {
+        try {
+          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+            await signInWithCustomToken(auth, __initial_auth_token);
+          } else {
+            // We wait for the auth state to settle before forcing anonymous
+          }
+        } catch (err) {
+          console.error("Auth error:", err);
+        }
       }
     };
 
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    
+    // Listen to user state changes (Google OR Anonymous)
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser) {
+        setUser(currentUser);
+      } else {
+        // If no user (e.g. after logout), fall back to anonymous
+        signInAnonymously(auth).catch(err => console.error(err));
+      }
+    });
     return () => unsubscribe();
   }, []);
 
   // 2. Data Synchronization (Firestore)
   useEffect(() => {
     if (!user) return;
-    // SIMPLIFIED PATH for local app:
-    const collectionRef = collection(db, 'users', user.uid, 'phrases');
+    
+    // PATH RULE: 
+    // If running LOCALLY or on VERCEL, use:
+    // const collectionRef = collection(db, 'users', user.uid, 'phrases');
+    
+    // If running in the PREVIEW window here, use:
+    const collectionRef = collection(db, 'artifacts', appId, 'users', user.uid, 'phrases');
     
     const unsubscribe = onSnapshot(collectionRef, (snapshot) => {
       const loadedPhrases = snapshot.docs.map(doc => ({
@@ -102,10 +129,29 @@ export default function FrenchJournal() {
       setPhrases(loadedPhrases);
     }, (err) => {
       console.error("Firestore error:", err);
-      setError("Failed to load your phrases.");
     });
     return () => unsubscribe();
   }, [user]);
+
+  // --- Auth Handlers ---
+  const handleGoogleLogin = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (err) {
+      console.error("Login failed", err);
+      setError("Login failed. Check your authorized domains in Firebase Console.");
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setPhrases([]); // Clear view immediately
+    } catch (err) {
+      console.error("Logout failed", err);
+    }
+  };
 
   // --- API Helper ---
   const callGemini = async (prompt) => {
@@ -127,39 +173,25 @@ export default function FrenchJournal() {
     return JSON.parse(resultText);
   };
 
-  // --- Feature 1: Enrich Phrase ---
+  // --- Features ---
   const enrichPhrase = async (text) => {
     const prompt = `
       I am learning French. Target phrase: "${text}"
-      Provide:
-      1. Translation
-      2. French example sentence
-      3. English translation of example
+      Provide: 1. Translation 2. French example sentence 3. English translation of example
       Return JSON: { "translation": "...", "example_french": "...", "example_english": "..." }
     `;
     return callGemini(prompt);
   };
 
-  // --- Feature 2: Story Mode ---
   const generateStory = async () => {
     if (phrases.length === 0) return;
     setIsStoryLoading(true);
     setError('');
-    
     const recentPhrases = phrases.slice(0, 10).map(p => p.original).join(", ");
-
     const prompt = `
-      Write a short, simple French story (max 100 words) that naturally incorporates as many of these phrases as possible: [${recentPhrases}].
-      If a phrase doesn't fit naturally, you can skip it.
-      
-      Return JSON:
-      {
-        "title": "A creative title in French",
-        "story_french": "The full story in French",
-        "story_english": "The full story translated to English"
-      }
+      Write a short, simple French story (max 100 words) using: [${recentPhrases}].
+      Return JSON: { "title": "...", "story_french": "...", "story_english": "..." }
     `;
-
     try {
       const data = await callGemini(prompt);
       setStory(data);
@@ -171,34 +203,21 @@ export default function FrenchJournal() {
     }
   };
 
-  // --- Feature 3: Grammar Guide ---
   const explainGrammar = async (phraseId, text) => {
     if (grammarExplanations[phraseId]) return;
-    
     setLoadingGrammarId(phraseId);
-    
     const prompt = `
-      Explain the grammar of this French phrase briefly for a beginner: "${text}".
-      Mention things like verb tense, gender/number agreement, or key prepositions.
-      Keep it under 40 words.
-      
+      Explain French grammar for: "${text}". Keep it under 40 words.
       Return JSON: { "explanation": "..." }
     `;
-
     try {
       const data = await callGemini(prompt);
-      setGrammarExplanations(prev => ({
-        ...prev,
-        [phraseId]: data.explanation
-      }));
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingGrammarId(null);
-    }
+      setGrammarExplanations(prev => ({ ...prev, [phraseId]: data.explanation }));
+    } catch (err) { console.error(err); } 
+    finally { setLoadingGrammarId(null); }
   };
 
-  // --- Handlers ---
+  // --- Main Handlers ---
   const handleAddPhrase = async (e) => {
     e.preventDefault();
     if (!newPhrase.trim() || !user) return;
@@ -206,8 +225,13 @@ export default function FrenchJournal() {
     setError('');
     try {
       const enrichedData = await enrichPhrase(newPhrase);
-      // SIMPLIFIED PATH for local app:
-      await addDoc(collection(db, 'users', user.uid, 'phrases'), {
+      
+      // PATH RULE: 
+      // Vercel/Local: collection(db, 'users', user.uid, 'phrases')
+      // Preview: collection(db, 'artifacts', appId, 'users', user.uid, 'phrases')
+      const collectionRef = collection(db, 'artifacts', appId, 'users', user.uid, 'phrases');
+      
+      await addDoc(collectionRef, {
         original: newPhrase,
         translation: enrichedData.translation,
         exampleFrench: enrichedData.example_french,
@@ -216,7 +240,6 @@ export default function FrenchJournal() {
       });
       setNewPhrase('');
     } catch (err) {
-      console.error(err);
       setError("Could not translate/save. Please try again.");
     } finally {
       setIsGenerating(false);
@@ -226,8 +249,11 @@ export default function FrenchJournal() {
   const handleDelete = async (id) => {
     if (!user) return;
     try {
-      // SIMPLIFIED PATH for local app:
-      await deleteDoc(doc(db, 'users', user.uid, 'phrases', id));
+      // PATH RULE: 
+      // Vercel/Local: doc(db, 'users', user.uid, 'phrases', id)
+      // Preview: doc(db, 'artifacts', appId, 'users', user.uid, 'phrases', id)
+      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'phrases', id);
+      await deleteDoc(docRef);
     } catch (err) { console.error(err); }
   };
 
@@ -259,19 +285,36 @@ export default function FrenchJournal() {
           </div>
           
           <div className="flex items-center gap-3">
-             {phrases.length > 2 && (
-              <button
-                onClick={generateStory}
-                disabled={isStoryLoading}
-                className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-indigo-500 hover:bg-indigo-400 text-xs font-medium text-white rounded-full transition-colors disabled:opacity-50"
-              >
-                {isStoryLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3 text-yellow-300" />}
-                ✨ Story Mode
-              </button>
-            )}
-            <div className="text-xs bg-indigo-800/50 px-3 py-1 rounded-full text-indigo-100">
-              {phrases.length} Saved
-            </div>
+             {user && !user.isAnonymous ? (
+               <div className="flex items-center gap-3">
+                 <div className="hidden sm:flex items-center gap-2 px-3 py-1 bg-indigo-700/50 rounded-full">
+                    {user.photoURL ? (
+                      <img src={user.photoURL} alt="User" className="w-5 h-5 rounded-full" />
+                    ) : (
+                      <User className="w-4 h-4 text-indigo-200" />
+                    )}
+                    <span className="text-xs font-medium text-indigo-100">
+                      {user.displayName || 'Signed In'}
+                    </span>
+                 </div>
+                 <button 
+                   onClick={handleLogout}
+                   className="p-2 hover:bg-indigo-500 rounded-lg transition-colors text-indigo-100"
+                   title="Sign Out"
+                 >
+                   <LogOut className="w-5 h-5" />
+                 </button>
+               </div>
+             ) : (
+               <button 
+                 onClick={handleGoogleLogin}
+                 className="flex items-center gap-2 px-4 py-2 bg-white text-indigo-600 rounded-lg text-xs font-bold shadow-sm hover:bg-indigo-50 transition-all"
+               >
+                 <LogIn className="w-4 h-4" />
+                 <span className="hidden sm:inline">Sign in to Sync</span>
+                 <span className="sm:hidden">Sync</span>
+               </button>
+             )}
           </div>
         </div>
       </header>
@@ -320,9 +363,10 @@ export default function FrenchJournal() {
         {/* Search & List */}
         <div className="flex flex-col gap-6">
           
-          {phrases.length > 0 && (
-            <div className="flex justify-between items-center gap-4">
-              <div className="relative flex-1">
+          {/* Controls Bar */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            {phrases.length > 0 && (
+              <div className="relative flex-1 w-full sm:w-auto">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
                 <input
                   type="text"
@@ -332,19 +376,18 @@ export default function FrenchJournal() {
                   className="w-full pl-10 pr-4 py-2 bg-transparent border-b border-slate-200 focus:border-indigo-500 outline-none text-sm transition-colors"
                 />
               </div>
-              {/* Mobile Story Button */}
-               {phrases.length > 2 && (
-                <button
-                  onClick={generateStory}
-                  disabled={isStoryLoading}
-                  className="sm:hidden flex items-center gap-2 px-3 py-2 bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg"
-                >
-                  {isStoryLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                  Story Mode
-                </button>
-              )}
-            </div>
-          )}
+            )}
+             {phrases.length > 2 && (
+              <button
+                onClick={generateStory}
+                disabled={isStoryLoading}
+                className="flex items-center gap-2 px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 text-xs font-bold rounded-lg transition-colors disabled:opacity-50"
+              >
+                {isStoryLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                Story Mode
+              </button>
+            )}
+          </div>
 
           {/* Cards Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -353,7 +396,6 @@ export default function FrenchJournal() {
                 key={phrase.id} 
                 className="group bg-white rounded-xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col relative overflow-hidden"
               >
-                {/* Decorative bar */}
                 <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-500/0 group-hover:bg-indigo-500 transition-colors"></div>
 
                 {/* Header */}
@@ -382,10 +424,8 @@ export default function FrenchJournal() {
                   </button>
                 </div>
 
-                {/* Grammar & Example Section */}
+                {/* Grammar & Example */}
                 <div className="mt-auto pl-2 pt-3 border-t border-slate-100">
-                  
-                  {/* Grammar Toggle */}
                   <div className="mb-3">
                     <button 
                       onClick={() => explainGrammar(phrase.id, phrase.original)}
@@ -401,8 +441,6 @@ export default function FrenchJournal() {
                         {grammarExplanations[phrase.id] ? "Grammar Note:" : "✨ Explain Grammar"}
                       </span>
                     </button>
-                    
-                    {/* Grammar Result */}
                     {grammarExplanations[phrase.id] && (
                       <div className="mt-2 text-xs text-indigo-800 bg-indigo-50 p-2 rounded-md border border-indigo-100 animate-fadeIn">
                         {grammarExplanations[phrase.id]}
@@ -410,7 +448,6 @@ export default function FrenchJournal() {
                     )}
                   </div>
 
-                  {/* Example */}
                   <div className="flex items-start gap-2">
                     <MessageCircle className="w-4 h-4 text-slate-400 mt-1 shrink-0" />
                     <div>
@@ -431,7 +468,7 @@ export default function FrenchJournal() {
               </div>
               <h3 className="text-slate-900 font-medium text-lg mb-2">No phrases yet</h3>
               <p className="text-slate-500 max-w-sm mx-auto">
-                Start typing French words or sentences above. We'll handle the translation and examples for you.
+                {user && user.isAnonymous ? "Sign in with Google (top right) to save your phrases permanently." : "Start typing French words above!"}
               </p>
             </div>
           )}
@@ -448,7 +485,6 @@ export default function FrenchJournal() {
                   </div>
                   <div>
                     <h2 className="text-lg font-bold text-slate-800">{story.title}</h2>
-                    <p className="text-xs text-slate-500">Generated using your vocabulary</p>
                   </div>
                 </div>
                 <button 
@@ -458,32 +494,25 @@ export default function FrenchJournal() {
                   <X className="w-5 h-5" />
                 </button>
               </div>
-              
               <div className="p-6 space-y-6">
                 <div>
                   <h3 className="text-sm font-bold text-indigo-600 mb-2 uppercase tracking-wide">French Story</h3>
-                  <p className="text-slate-800 leading-relaxed font-serif text-lg">
-                    {story.story_french}
-                  </p>
+                  <p className="text-slate-800 leading-relaxed font-serif text-lg">{story.story_french}</p>
                   <button 
                     onClick={() => speak(story.story_french)}
                     className="mt-3 text-xs flex items-center gap-1.5 text-slate-500 hover:text-indigo-600 transition-colors"
                   >
-                    <Volume2 className="w-4 h-4" /> Listen to story
+                    <Volume2 className="w-4 h-4" /> Listen
                   </button>
                 </div>
-                
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
                   <h3 className="text-xs font-bold text-slate-400 mb-2 uppercase tracking-wide">English Translation</h3>
-                  <p className="text-slate-600 text-sm leading-relaxed">
-                    {story.story_english}
-                  </p>
+                  <p className="text-slate-600 text-sm leading-relaxed">{story.story_english}</p>
                 </div>
               </div>
             </div>
           </div>
         )}
-
       </main>
     </div>
   );
