@@ -33,7 +33,7 @@ import {
 // --- 1. FIREBASE CONFIGURATION ---
 // (I copied the structure from your screenshot, but you must paste the values back in!)
 const firebaseConfig = {
-  apiKey: "PASTE_YOUR_FIREBASE_API_KEY_HERE",
+  apiKey: "AIzaSyBSMoftACUzadhH6k5yHcNwXaIfjG6MFx0",
   authDomain: "my-way-to-french-c2.firebaseapp.com",
   projectId: "my-way-to-french-c2",
   storageBucket: "my-way-to-french-c2.firebasestorage.app",
