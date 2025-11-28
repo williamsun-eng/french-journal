@@ -37,8 +37,7 @@ import {
   serverTimestamp 
 } from 'firebase/firestore';
 
-// --- 1. FIREBASE CONFIGURATION ---
-// (I copied the structure from your screenshot, but you must paste the values back in!)
+// --- 1. FIREBASE CONFIGURATION (From your screenshot) ---
 const firebaseConfig = {
   apiKey: "AIzaSyBSMoftACUzadhH6k5yHcNwXaIfjG6MFx0",
   authDomain: "my-way-to-french-c2.firebaseapp.com",
@@ -48,10 +47,10 @@ const firebaseConfig = {
   appId: "1:26662411136:web:f7956b819034a01e12bf65"
 };
 
-// --- 2. GEMINI API KEY ---
-const apiKey = "AIzaSyBz642GWXDZAakN6adVkW0timspyr-LCAc"; 
+// --- 2. GEMINI API KEY (From your screenshot) ---
+const apiKey = "AIzaSyBz642GWXDZAakN6adVkW0timspyr-LCAc";
 
-
+// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -80,11 +79,7 @@ export default function FrenchJournal() {
       // Only sign in anonymously if we aren't already signed in
       if (!auth.currentUser) {
         try {
-          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-            await signInWithCustomToken(auth, __initial_auth_token);
-          } else {
-            // We wait for the auth state to settle before forcing anonymous
-          }
+          // We wait for the auth state to settle before forcing anonymous
         } catch (err) {
           console.error("Auth error:", err);
         }
@@ -109,12 +104,9 @@ export default function FrenchJournal() {
   useEffect(() => {
     if (!user) return;
     
-    // PATH RULE: 
-    // If running LOCALLY or on VERCEL, use:
-    // const collectionRef = collection(db, 'users', user.uid, 'phrases');
-    
-    // If running in the PREVIEW window here, use:
-    const collectionRef = collection(db, 'artifacts', appId, 'users', user.uid, 'phrases');
+    // --- FIX APPLIED HERE ---
+    // We removed 'artifacts' and 'appId'. Now using the direct path.
+    const collectionRef = collection(db, 'users', user.uid, 'phrases');
     
     const unsubscribe = onSnapshot(collectionRef, (snapshot) => {
       const loadedPhrases = snapshot.docs.map(doc => ({
@@ -226,10 +218,9 @@ export default function FrenchJournal() {
     try {
       const enrichedData = await enrichPhrase(newPhrase);
       
-      // PATH RULE: 
-      // Vercel/Local: collection(db, 'users', user.uid, 'phrases')
-      // Preview: collection(db, 'artifacts', appId, 'users', user.uid, 'phrases')
-      const collectionRef = collection(db, 'artifacts', appId, 'users', user.uid, 'phrases');
+      // --- FIX APPLIED HERE ---
+      // Using direct 'users' collection instead of 'artifacts'
+      const collectionRef = collection(db, 'users', user.uid, 'phrases');
       
       await addDoc(collectionRef, {
         original: newPhrase,
@@ -249,10 +240,9 @@ export default function FrenchJournal() {
   const handleDelete = async (id) => {
     if (!user) return;
     try {
-      // PATH RULE: 
-      // Vercel/Local: doc(db, 'users', user.uid, 'phrases', id)
-      // Preview: doc(db, 'artifacts', appId, 'users', user.uid, 'phrases', id)
-      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'phrases', id);
+      // --- FIX APPLIED HERE ---
+      // Using direct 'users' document path
+      const docRef = doc(db, 'users', user.uid, 'phrases', id);
       await deleteDoc(docRef);
     } catch (err) { console.error(err); }
   };
