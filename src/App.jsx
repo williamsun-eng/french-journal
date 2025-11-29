@@ -48,7 +48,7 @@ const firebaseConfig = {
 };
 
 // --- 2. GEMINI API KEY (From your screenshot) ---
-const apiKey = "AIzaSyBz642GWXDZAakN6adVkW0timspyr-LCAc";
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
